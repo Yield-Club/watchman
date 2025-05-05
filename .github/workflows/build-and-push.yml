@@ -1,0 +1,105 @@
+name: Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      ECR_REGION:
+        description: ECR region name
+        required: true
+        type: string
+      ECR_REPOSITORY_NAME:
+        description: ECR repo name
+        required: true
+        type: string
+
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+
+    outputs:
+      DOCKER_IMAGE:
+        description: "name+tag of the pushed image, e.g. myimage:b4dc0d3"
+        value: ${{ jobs.docker-build.outputs.docker-image }}
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      docker-image: ${{ steps.docker-push.outputs.docker-image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.ECR_REGION }}
+          mask-aws-account-id: no
+
+      - name: docker build
+        env:
+          IMAGE_NAME: ${{ inputs.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+          DOCKER_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}
+          docker pull moov/watchman:latest
+          docker tag moov/watchman:latest ${DOCKER_IMAGE}
+
+
+    #   - name: Run Trivy vulnerability scanner for npm dependencies
+    #     id: trivy-scan-npm
+    #     uses: aquasecurity/trivy-action@master
+    #     with:
+    #       image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+    #       format: 'table'
+    #       vuln-type: 'library,os'
+    #       exit-code: '0'
+    #       ignore-unfixed: false
+    #       severity: 'HIGH,CRITICAL'
+    #       output: trivy.txt
+    #     env:
+    #       IMAGE_NAME: ${{ inputs.ECR_REPOSITORY_NAME }}
+    #       IMAGE_TAG: ${{ github.sha }}
+    #       TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+
+    #   - name: Publish Trivy Output to Summary
+    #     run: |
+    #       if [[ -s trivy.txt ]]; then
+    #           {
+    #               echo "### Docker Security Output"
+    #               echo "<details><summary>Click to expand</summary>"
+    #               echo ""
+    #               echo '```output'
+    #               cat trivy.txt
+    #               echo '```'
+    #               echo "</details>"
+    #           } >> $GITHUB_STEP_SUMMARY
+    #       fi
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: 'true'
+
+      - name: Tag and push Docker image to Amazon ECR
+        id: docker-push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_NAME: ${{ inputs.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+          DOCKER_IMAGE=${IMAGE_NAME}:${IMAGE_TAG} 
+          
+          docker tag ${DOCKER_IMAGE} "${REGISTRY}/${DOCKER_IMAGE}"
+          docker push "${REGISTRY}/${DOCKER_IMAGE}"
+          echo "docker-image=${DOCKER_IMAGE}" >> "$GITHUB_OUTPUT"

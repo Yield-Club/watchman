@@ -1,0 +1,117 @@
+
+
+name: Deploy
+
+on:
+  workflow_call:
+    inputs:
+      AWS_REGION:
+        required: true
+        type: string
+      STACK_NAME:
+        description: "Stack name"
+        required: true
+        type: string
+      INFRA_REPO_NAME:
+        description: "Full name of the infra repo, e.g. myorg/myrepo"
+        required: true
+        type: string
+      ENV:
+        description: "environment name"
+        required: true
+        type: string
+      DOCKER_IMAGE:
+        description: "name+tag of the image to deploy, e.g. myimage:b4dc0d3"
+        required: true
+        type: string
+
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+      SSH_KEY:
+        required: true
+
+jobs:
+  cdk-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.SSH_KEY }}
+          repository: ${{ inputs.INFRA_REPO_NAME }}
+
+      - name: Save npm cache
+        id: yc-core-cdk
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: v1-yc-core-cdk-npm-${{ hashFiles('package-lock.json') }}
+
+      - name: npm ci
+        if: steps.yc-core-cdk.outputs.cache-hit != 'true'
+        run: |
+          npm ci
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.AWS_REGION }}
+          mask-aws-account-id: 'no'
+
+      - name: cdk diff
+        run: |
+          set -euxo pipefail
+          npm run cdk -- diff \
+            ${{ inputs.STACK_NAME }} \
+            --context stack-${{ inputs.STACK_NAME }}-image=${{ inputs.DOCKER_IMAGE }} \
+            --context env=${{ inputs.ENV }} 
+
+  cdk-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: cdk-diff
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.SSH_KEY }}
+          repository: ${{ inputs.INFRA_REPO_NAME }}
+
+      - name: Save npm cache
+        id: yc-core-cdk
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: v1-yc-core-cdk-npm-${{ hashFiles('package-lock.json') }}
+
+      - name: npm ci
+        if: steps.yc-core-cdk.outputs.cache-hit != 'true'
+        run: |
+          npm ci
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.AWS_REGION }}
+          mask-aws-account-id: 'no'
+ 
+      - name: cdk deploy
+        run: |
+          set -euxo pipefail
+          npm run cdk -- deploy \
+            ${{ inputs.STACK_NAME }} \
+            --context stack-${{ inputs.STACK_NAME }}-image=${{ inputs.DOCKER_IMAGE }} \
+            --context env=${{ inputs.ENV }} \
+            --require-approval never
