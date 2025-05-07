@@ -1,0 +1,42 @@
+name: Deploy to stage
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+
+  build-and-push:
+    uses: ./.github/workflows/build-and-push.yml
+
+    permissions:
+      id-token: write
+      contents: read
+
+    with:
+      ECR_REGION: "ca-central-1"
+      ECR_REPOSITORY_NAME: "yc-watchman"
+    secrets:
+      AWS_ROLE_ARN: "${{ secrets.AWS_ROLE_ARN_STAGING }}"
+
+  deploy:
+    needs: build-and-push
+    uses: ./.github/workflows/deploy.yml
+
+    permissions:
+      id-token: write
+      contents: read
+
+    with:
+      AWS_REGION: "ca-central-1"
+      STACK_NAME: "yc-watchman"
+      INFRA_REPO_NAME: "Yield-Club/infra"
+      ENV: "staging"
+      DOCKER_IMAGE: "${{ needs.build-and-push.outputs.DOCKER_IMAGE }}"
+    secrets:
+      AWS_ROLE_ARN: "${{ secrets.AWS_ROLE_ARN_STAGING }}"
+      SSH_KEY: "${{ secrets.SSH_KEY }}"
